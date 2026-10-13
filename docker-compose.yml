@@ -135,6 +135,7 @@ services:
       keycloak:
         condition: service_healthy
     environment:
+      GOFLAGS: -buildvcs=false
       TEST_DATABASE_URL: postgres://wagering:local-only@postgres:5432/wagering?sslmode=disable
       TEST_SQS_ENDPOINT: http://localstack:4566
       AWS_REGION: us-east-1
