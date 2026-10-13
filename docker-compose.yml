@@ -35,6 +35,7 @@ services:
       interval: 5s
       timeout: 15s
       retries: 40
+      start_period: 30s
   postgres:
     image: postgres:17.6-bookworm
     environment:
