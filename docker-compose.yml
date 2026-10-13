@@ -1,7 +1,7 @@
 services:
   keycloak:
     image: quay.io/keycloak/keycloak:26.8.0
-    command: ["start-dev", "--import-realm"]
+    command: [ "start-dev", "--import-realm" ]
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: local-only
@@ -12,11 +12,11 @@ services:
     volumes:
       - ./keycloak/wagering-realm.json:/opt/keycloak/data/import/wagering-realm.json:ro
     healthcheck:
-      test: ["CMD-SHELL", "bash -c \"{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.0 200'; } 0<>/dev/tcp/localhost/9000\""]
+      test: [ "CMD-SHELL", "bash -c \"{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.0 200'; } 0<>/dev/tcp/localhost/9000\"" ]
       interval: 5s
-      timeout: 3s
-      retries: 30
-      start_period: 20s
+      timeout: 15s
+      retries: 40
+      start_period: 30s
   localstack:
     image: localstack/localstack:4.8.1
     environment:
@@ -31,10 +31,10 @@ services:
       - producer_credentials:/var/run/wager-credentials/producer
       - consumer_credentials:/var/run/wager-credentials/consumer
     healthcheck:
-      test: ["CMD-SHELL", "test -s /var/run/wager-credentials/producer/credentials && test -s /var/run/wager-credentials/consumer/credentials && awslocal sqs get-queue-url --queue-name wager-events.fifo >/dev/null 2>&1"]
-      interval: 3s
-      timeout: 3s
-      retries: 30
+      test: [ "CMD-SHELL", "test -s /var/run/wager-credentials/producer/credentials && test -s /var/run/wager-credentials/consumer/credentials && awslocal sqs get-queue-url --queue-name wager-events.fifo >/dev/null 2>&1" ]
+      interval: 5s
+      timeout: 15s
+      retries: 40
   postgres:
     image: postgres:17.6-bookworm
     environment:
@@ -46,7 +46,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U wagering -d wagering"]
+      test: [ "CMD-SHELL", "pg_isready -U wagering -d wagering" ]
       interval: 2s
       timeout: 3s
       retries: 30
@@ -59,7 +59,7 @@ services:
       PGPASSWORD: local-only
     volumes:
       - ./migrations:/migrations:ro
-    entrypoint: ["psql", "-h", "postgres", "-U", "wagering", "-d", "wagering", "-v", "ON_ERROR_STOP=1", "-f", "/migrations/apply.sql"]
+    entrypoint: [ "psql", "-h", "postgres", "-U", "wagering", "-d", "wagering", "-v", "ON_ERROR_STOP=1", "-f", "/migrations/apply.sql" ]
   app:
     build: .
     environment:
@@ -91,7 +91,7 @@ services:
     stop_grace_period: 30s
   producer:
     build: .
-    entrypoint: ["/usr/local/bin/producer"]
+    entrypoint: [ "/usr/local/bin/producer" ]
     environment:
       PRODUCER_HTTP_ADDR: :8082
       SQS_ENDPOINT: http://localstack:4566
@@ -116,15 +116,15 @@ services:
     stop_grace_period: 15s
   checks:
     image: golang:1.27.2-bookworm
-    profiles: ["tools"]
+    profiles: [ "tools" ]
     working_dir: /src
     volumes:
       - .:/src
-    entrypoint: ["sh", "-c"]
-    command: ["test -z \"$$(gofmt -l cmd internal)\" && go vet ./... && go test -race ./..."]
+    entrypoint: [ "sh", "-c" ]
+    command: [ "test -z \"$$(gofmt -l cmd internal)\" && go vet ./... && go test -race ./..." ]
   integration:
     image: golang:1.27.2-bookworm
-    profiles: ["tools"]
+    profiles: [ "tools" ]
     working_dir: /src
     depends_on:
       postgres:
@@ -149,10 +149,9 @@ services:
       - .:/src
       - producer_credentials:/run/producer-credentials:ro
       - consumer_credentials:/run/consumer-credentials:ro
-    command: ["go", "test", "-race", "-tags", "integration", "-count=1", "./..."]
+    command: [ "go", "test", "-race", "-tags", "integration", "-count=1", "./..." ]
 volumes:
   postgres_data:
   producer_credentials:
   consumer_credentials:
-
 
