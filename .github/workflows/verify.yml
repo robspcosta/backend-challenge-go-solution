@@ -1,0 +1,28 @@
+name: Verify
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate Compose
+        run: docker compose config --quiet
+      - name: Build application image
+        run: docker compose build app producer
+      - name: Start real dependencies
+        run: docker compose up -d postgres localstack keycloak
+      - name: Apply versioned migrations
+        run: docker compose run --rm migrate
+      - name: Run static analysis and race tests
+        run: docker compose run --rm integration sh -ec 'test -z "$(gofmt -l cmd internal)" && go vet -tags integration ./... && go test -race -tags integration -count=1 ./...'
+      - name: Run real load smoke test
+        run: docker compose run --rm integration go test -race -tags 'integration load' -count=1 ./internal/app -run TestLoadHarnessRealContainers -v
+      - name: Stop isolated environment
+        if: always()
+        run: docker compose down -v --remove-orphans

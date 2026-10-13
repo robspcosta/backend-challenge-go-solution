@@ -1,0 +1,10 @@
+DROP TRIGGER inbox_guard ON inbox_message;
+DROP TRIGGER inbox_no_truncate ON inbox_message;
+DROP FUNCTION protect_inbox();
+DROP TABLE inbox_message;
+DROP TRIGGER outbox_snapshot_guard ON outbox_event;
+DROP TRIGGER outbox_no_delete ON outbox_event;
+DROP TRIGGER outbox_no_truncate ON outbox_event;
+DROP FUNCTION protect_outbox_snapshot();
+DROP FUNCTION protect_outbox_deletion();
+DROP TABLE outbox_event;

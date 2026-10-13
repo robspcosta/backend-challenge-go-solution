@@ -1,0 +1,158 @@
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.8.0
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: local-only
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME: http://localhost:8081
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - ./keycloak/wagering-realm.json:/opt/keycloak/data/import/wagering-realm.json:ro
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c \"{ printf 'HEAD /health/ready HTTP/1.0\\r\\n\\r\\n' >&0; grep 'HTTP/1.0 200'; } 0<>/dev/tcp/localhost/9000\""]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 20s
+  localstack:
+    image: localstack/localstack:4.8.1
+    environment:
+      SERVICES: sqs,iam
+      AWS_DEFAULT_REGION: us-east-1
+      SQS_ENDPOINT_STRATEGY: path
+      ENFORCE_IAM: "1"
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      - ./localstack/init:/etc/localstack/init/ready.d:ro
+      - producer_credentials:/var/run/wager-credentials/producer
+      - consumer_credentials:/var/run/wager-credentials/consumer
+    healthcheck:
+      test: ["CMD-SHELL", "test -s /var/run/wager-credentials/producer/credentials && test -s /var/run/wager-credentials/consumer/credentials && awslocal sqs get-queue-url --queue-name wager-events.fifo >/dev/null 2>&1"]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  postgres:
+    image: postgres:17.6-bookworm
+    environment:
+      POSTGRES_USER: wagering
+      POSTGRES_PASSWORD: local-only
+      POSTGRES_DB: wagering
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wagering -d wagering"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  migrate:
+    image: postgres:17.6-bookworm
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: local-only
+    volumes:
+      - ./migrations:/migrations:ro
+    entrypoint: ["psql", "-h", "postgres", "-U", "wagering", "-d", "wagering", "-v", "ON_ERROR_STOP=1", "-f", "/migrations/apply.sql"]
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://wagering_runtime:local-only-runtime@postgres:5432/wagering?sslmode=disable
+      HTTP_ADDR: :8080
+      SQS_ENDPOINT: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_SHARED_CREDENTIALS_FILE: /run/wager-credentials/credentials
+      AWS_PROFILE: consumer
+      SQS_MESSAGE_HMAC_KEY: ${SQS_MESSAGE_HMAC_KEY:-local-only-message-signing-key-change-me}
+      SQS_INPUT_QUEUE: wager-transactions.fifo
+      SQS_EVENT_QUEUE: wager-events.fifo
+      OIDC_ISSUER: http://localhost:8081/realms/wagering
+      OIDC_JWKS_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
+      OIDC_AUDIENCE: wagering-api
+      OIDC_INTERNAL_CLIENT: wallet-internal
+      OIDC_PROVIDER_CLIENTS: provider-a,provider-b
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      localstack:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - consumer_credentials:/run/wager-credentials:ro
+    stop_grace_period: 30s
+  producer:
+    build: .
+    entrypoint: ["/usr/local/bin/producer"]
+    environment:
+      PRODUCER_HTTP_ADDR: :8082
+      SQS_ENDPOINT: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_SHARED_CREDENTIALS_FILE: /run/wager-credentials/credentials
+      AWS_PROFILE: producer
+      SQS_INPUT_QUEUE: wager-transactions.fifo
+      SQS_MESSAGE_HMAC_KEY: ${SQS_MESSAGE_HMAC_KEY:-local-only-message-signing-key-change-me}
+      OIDC_ISSUER: http://localhost:8081/realms/wagering
+      OIDC_JWKS_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
+      OIDC_AUDIENCE: wagering-api
+      OIDC_PROVIDER_CLIENTS: provider-a,provider-b
+    depends_on:
+      localstack:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    volumes:
+      - producer_credentials:/run/wager-credentials:ro
+    ports:
+      - "127.0.0.1:8082:8082"
+    stop_grace_period: 15s
+  checks:
+    image: golang:1.27.2-bookworm
+    profiles: ["tools"]
+    working_dir: /src
+    volumes:
+      - .:/src
+    entrypoint: ["sh", "-c"]
+    command: ["test -z \"$$(gofmt -l cmd internal)\" && go vet ./... && go test -race ./..."]
+  integration:
+    image: golang:1.27.2-bookworm
+    profiles: ["tools"]
+    working_dir: /src
+    depends_on:
+      postgres:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      keycloak:
+        condition: service_healthy
+    environment:
+      TEST_DATABASE_URL: postgres://wagering:local-only@postgres:5432/wagering?sslmode=disable
+      TEST_SQS_ENDPOINT: http://localstack:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      SQS_MESSAGE_HMAC_KEY: local-only-message-signing-key-change-me
+      TEST_OIDC_ISSUER: http://localhost:8081/realms/wagering
+      TEST_OIDC_JWKS_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/certs
+      TEST_OIDC_TOKEN_URL: http://keycloak:8080/realms/wagering/protocol/openid-connect/token
+      TEST_PRODUCER_CREDENTIALS: /run/producer-credentials/credentials
+      TEST_CONSUMER_CREDENTIALS: /run/consumer-credentials/credentials
+    volumes:
+      - .:/src
+      - producer_credentials:/run/producer-credentials:ro
+      - consumer_credentials:/run/consumer-credentials:ro
+    command: ["go", "test", "-race", "-tags", "integration", "-count=1", "./..."]
+volumes:
+  postgres_data:
+  producer_credentials:
+  consumer_credentials:
+
+
